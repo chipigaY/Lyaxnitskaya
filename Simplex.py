@@ -88,6 +88,7 @@ class SimplexSolver:
             print(f"{bname:>5} | {vals} | {row[-1]:7.3f}")
 
         print("-" * len(header))
+        f_row = T[-1]
         vals = " ".join(f"{v:7.3f}" for v in f_row[:-1])
         print(f"{'f':>5} | {vals} | {f_row[-1]:7.3f}")
 
