@@ -3,23 +3,26 @@ from fractions import Fraction
 
 
 class SimplexSolver:
-    def __init__(self, c, A, b, signs, maximize=True, verbose=True):
+    def __init__(self):
+        c = list(map(float, input('Введите коэффициенты целевой функции: ').split()))
+        A = []
+        b = list(map(float, input('Введите правые части ограничений: ').split()))
+        for i in range(len(b)):
+            A.append(list(map(float, input('Введите коэффициенты матрицы ограничений: ').split())))
         self.c_orig = np.array(c, dtype=float)
         self.A_orig = np.array(A, dtype=float)
         self.b_orig = np.array(b, dtype=float)
-        self.signs = signs
-        self.maximize = maximize
-        self.verbose = verbose
+        self.signs = input("Введите знаки ограничений: ").split()
+        self.maximize = input("maximize/minimize: ").strip().lower() == "maximize"
+        self.verbose = input("verbose/not verbose: ").strip().lower() == "verbose"
         self.n_orig = len(c)
         self.m = len(b)
 
     def _to_canonical(self):
         A = []
         b = []
-        c = list(self.c_orig)
         extra = 0
         for i in range(self.m):
-            row = list(self.A_orig[i])
             s = self.signs[i]
             if s == '<=':
                 extra += 1
@@ -222,14 +225,7 @@ if __name__ == "__main__":
     print("      x1, x2 >= 0")
     print("=" * 70)
 
-    solver = SimplexSolver(
-        c=[3, 2],
-        A=[[1, 1], [1, 3]],
-        b=[4, 6],
-        signs=["<=", "<="],
-        maximize=True,
-        verbose=True,
-    )
+    solver = SimplexSolver()
     res = solver.solve()
     print(f"\nОтвет: x = {res['x']}, f = {res['f']:.3f}, статус = {res['status']}")
 
@@ -241,13 +237,6 @@ if __name__ == "__main__":
     print("      x1, x2 >= 0")
     print("=" * 70)
 
-    solver2 = SimplexSolver(
-        c=[2, 3],
-        A=[[1, 1], [1, 2]],
-        b=[3, 8],
-        signs=[">=", "<="],
-        maximize=True,
-        verbose=True,
-    )
+    solver2 = SimplexSolver()
     res2 = solver2.solve()
     print(f"\nОтвет: x = {res['x']}, f = {res['f']:.3f}, статус = {res['status']}")
