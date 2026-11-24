@@ -16,13 +16,13 @@ class SimplexSolver:
         self.maximize = input("maximize/minimize: ").strip().lower() == "maximize"
         self.verbose = input("verbose/not verbose: ").strip().lower() == "verbose"
         self.n_orig = len(c)
-        self.m = len(b)
+        self.m_orig = len(b)
 
     def _to_canonical(self):
         A = []
         b = []
         extra = 0
-        for i in range(self.m):
+        for i in range(self.m_orig):
             s = self.signs[i]
             if s == '<=':
                 extra += 1
@@ -36,7 +36,7 @@ class SimplexSolver:
         basis = []
         col = self.n_orig
 
-        for i in range(self.m):
+        for i in range(self.m_orig):
             row_full = [0.0] * n_total
             for j in range(self.n_orig):
                 row_full[j] = self.A_orig[i][j]
@@ -122,11 +122,11 @@ class SimplexSolver:
     def solve(self):
         A, b, c, basis, art_indices = self._to_canonical()
         n_total = A.shape[1]
-        m = A.shape[0]
+        m_total = A.shape[0]
 
-        T = np.zeros((m + 1, n_total + 1))
-        T[:m, :n_total] = A
-        T[:m, -1] = b
+        T = np.zeros((m_total + 1, n_total + 1))
+        T[:m_total, :n_total] = A
+        T[:m_total, -1] = b
         T[-1, :n_total] = c
         T[-1, -1] = 0.0
 
@@ -138,7 +138,7 @@ class SimplexSolver:
             T[-1, :] = 0.0                        
             for j in art_indices:
                 T[-1, j] = 1.0                      
-            for i in range(m):
+            for i in range(m_total):
                 if basis[i] in art_indices:
                     T[-1] -= T[i]                   
             T[-1, :n_total] *= -1                   
@@ -150,13 +150,13 @@ class SimplexSolver:
                 if self.verbose:
                     self._print_table(T, basis, n_total)
 
-            art_sum = sum(T[i, -1] for i in range(m) if basis[i] in art_indices)
+            art_sum = sum(T[i, -1] for i in range(m_total) if basis[i] in art_indices)
             if abs(art_sum) > 1e-6:
                 print("Задача несовместна (искусственные не вышли из базиса).")
                 return None
             
             keep = [j for j in range(n_total) if j not in art_indices]
-            for i in range(m):
+            for i in range(m_total):
                 if basis[i] in art_indices:
                     for j in keep:
                         if abs(T[i, j]) > 1e-9:
@@ -170,7 +170,7 @@ class SimplexSolver:
                     else:
                         T = np.delete(T, i, axis=0)
                         del basis[i]
-                        m -= 1
+                        m_total -= 1
 
             T = T[:, keep + [n_total]] if False else np.hstack(
                 [T[:, keep], T[:, -1:]]
@@ -181,7 +181,7 @@ class SimplexSolver:
             T[-1, :] = 0.0
             for j in range(n_total):
                 T[-1, j] = c_new[j]
-            for i in range(m):
+            for i in range(m_total):
                 cb = c_new[basis[i]] if basis[i] < n_total else 0.0
                 T[-1] -= cb * T[i]
 
@@ -201,11 +201,7 @@ class SimplexSolver:
             if bj < n_total:
                 x[bj] = T[i, -1]
 
-        f_val = T[-1, -1]
-        if not self.maximize:
-            f_val = -f_val
-
-        f_val = T[-1, -1]
+        f_val = -T[-1, -1]
         if not self.maximize:
             f_val = -f_val
 
