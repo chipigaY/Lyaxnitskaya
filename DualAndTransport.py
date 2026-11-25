@@ -514,319 +514,156 @@ def solve_transport(
 
 # ДВОЙСТВЕННЫЙ СИМПЛЕКС (канонизация и вывод)
 
-def format_equation(row, var_names):
-    terms = []
-    for coef, name in zip(row, var_names):
-        if abs(coef) < 1e-9:
-            continue
-        if abs(coef - 1.0) < 1e-9:
-            terms.append(name)
-        elif abs(coef + 1.0) < 1e-9:
-            terms.append(f"-{name}")
-        else:
-            terms.append(f"{coef:g}*{name}")
-    if not terms:
-        return "0"
-    equation = terms[0]
-    for term in terms[1:]:
-        if term.startswith("-"):
-            equation += f" - {term[1:]}"
-        else:
-            equation += f" + {term}"
-    return equation
+def solve_linear_programming(c, A, b, direction, signs):
+    """Решает прямую и двойственную задачи при x >= 0."""
+    from scipy.optimize import linprog
 
+    tolerance = 1e-7
+    n = len(c)
+    m = len(b)
 
-def _canonicalize(A, b, c, sense, constraint_signs, variable_constraints):
-    A_np = np.asarray(A, dtype=float)
-    b_np = np.asarray(b, dtype=float).reshape(-1)
-    c_np = np.asarray(c, dtype=float).reshape(-1)
-
-    m, n = A_np.shape
-    signs = ["<="] * m if constraint_signs is None else list(constraint_signs)
-    if len(signs) != m or any(sign not in ("<=", ">=", "=") for sign in signs):
-        raise ValueError("constraint_signs должны задавать знак '<=', '>=' или '=' для каждого ограничения.")
-
-    if variable_constraints is None:
-        variable_constraints = ["nonnegative"] * n
-    if len(variable_constraints) != n or any(constraint not in ("nonnegative", "free") for constraint in variable_constraints):
-        raise ValueError("variable_constraints должны задавать 'nonnegative' или 'free' для каждой переменной.")
-
-    var_names = [f"x{i + 1}" for i in range(n)]
-    output = ["Приведение к канонической форме:"]
-
-    if sense == "min":
-        output.append("1) Умножаем целевую функцию на -1, чтобы перейти к максимизации:")
-        c_np = -c_np
-        output.append(f"   f(x) = {format_equation(c_np, var_names)} -> max")
-    else:
-        output.append(f"1) Задача уже на максимум: f(x) = {format_equation(c_np, var_names)} -> max")
-
-    free_vars = [index for index, constraint in enumerate(variable_constraints) if constraint == "free"]
-    if free_vars:
-        output.append("2) Замена свободных переменных (x = x' - x''):")
-        for index in reversed(free_vars):
-            A_np = np.insert(A_np, index + 1, -A_np[:, index], axis=1)
-            c_np = np.insert(c_np, index + 1, -c_np[index])
-            var_names[index] = f"x'{index + 1}"
-            var_names.insert(index + 1, f"x''{index + 1}")
-            output.append(f"   x{index + 1} -> x'{index + 1} - x''{index + 1}")
-    else:
-        output.append("2) Свободных переменных нет.")
-
-    output.append("3) Преобразование ограничений в уравнения:")
-    extra_columns = []
-    extra_names = []
-    variable_count = n
-
-    for index, sign in enumerate(signs):
-        row_str = format_equation(A_np[index], var_names)
-        value = b_np[index]
-
+    A_ub, b_ub, A_eq, b_eq = [], [], [], []
+    for i, sign in enumerate(signs):
         if sign == "<=":
-            variable_count += 1
-            column = np.zeros(m)
-            column[index] = 1.0
-            extra_columns.append(column)
-            extra_names.append(f"x{variable_count}")
-            output.append(f"   {row_str} <= {value:g}  =>  {row_str} + x{variable_count} = {value:g}")
+            A_ub.append(A[i])
+            b_ub.append(b[i])
         elif sign == ">=":
-            variable_count += 1
-            column = np.zeros(m)
-            column[index] = -1.0
-            extra_columns.append(column)
-            extra_names.append(f"x{variable_count}")
-            output.append(f"   {row_str} >= {value:g}  =>  {row_str} - x{variable_count} = {value:g}")
+            A_ub.append(-A[i])
+            b_ub.append(-b[i])
         else:
-            output.append(f"   {row_str} = {value:g}   (уже уравнение)")
+            A_eq.append(A[i])
+            b_eq.append(b[i])
 
-    decision_count = A_np.shape[1]
-    if extra_columns:
-        A_final = np.column_stack([A_np, *extra_columns])
-        c_final = np.pad(c_np, (0, len(extra_columns)))
-        var_names.extend(extra_names)
-    else:
-        A_final = A_np
-        c_final = c_np
+    A_ub = np.asarray(A_ub) if A_ub else None
+    b_ub = np.asarray(b_ub) if b_ub else None
+    A_eq = np.asarray(A_eq) if A_eq else None
+    b_eq = np.asarray(b_eq) if b_eq else None
 
-    output.append("4) Все переменные неотрицательны.")
-    output.append("\nИТОГОВАЯ КАНОНИЧЕСКАЯ ФОРМА:")
-    output.append(f"f(x) = {format_equation(c_final, var_names)} -> max")
-    for index in range(m):
-        output.append(f"  {format_equation(A_final[index], var_names)} = {b_np[index]:g}")
-    output.append(f"  {', '.join(var_names)} >= 0")
+    print("\n========== ПРЯМАЯ ЗАДАЧА ==========")
+    primal_result = linprog(
+        c=c if direction == "min" else -c,
+        A_ub=A_ub, b_ub=b_ub,
+        A_eq=A_eq, b_eq=b_eq,
+        bounds=[(0, None)] * n,
+        method="highs",
+    )
 
-    return (A_final, b_np, c_final, decision_count), var_names, free_vars, output
-
-
-def _print_table(tableau, basis, names, title, pivot_row=None, pivot_column=None):
-    print(f"\n{title}")
-    rows, cols = tableau.shape
-    variable_count = cols - 1
-
-    non_basic = [j for j in range(variable_count) if j not in basis]
-    
-    headers = ["Базис"] + [names[j] for j in non_basic] + ["b"]
-    
-    data_rows = []
-    
-    for i in range(rows - 1):
-        b_name = names[basis[i]] if i < len(basis) else ""
-        row_vals = [b_name]
-        for j in non_basic:
-            val_str = f"{tableau[i, j]:.4g}"
-            if pivot_row == i and pivot_column == j:
-                val_str += "*"
-            row_vals.append(val_str)
-        row_vals.append(f"{tableau[i, -1]:.4g}")
-        data_rows.append(row_vals)
-        
-    f_vals = ["Δ"]
-    for j in non_basic:
-        val_str = f"{tableau[-1, j]:.4g}"
-        if pivot_row is None and pivot_column == j:
-            val_str += "*"
-        f_vals.append(val_str)
-    f_vals.append(f"{tableau[-1, -1]:.4g}")
-    data_rows.append(f_vals)
-
-    widths = []
-    for col_idx in range(len(headers)):
-        col_vals = [headers[col_idx]] + [row[col_idx] for row in data_rows]
-        widths.append(max(len(str(v)) for v in col_vals))
-
-    sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
-    print(sep)
-    
-    h_str = "| "
-    for i, h in enumerate(headers):
-        h_str += f"{h:<{widths[i]}} | "
-    print(h_str)
-    print(sep)
-    
-    for row in data_rows:
-        r_str = "| "
-        for i, val in enumerate(row):
-            r_str += f"{val:<{widths[i]}} | "
-        print(r_str)
-        print(sep)
-
-
-# ДВОЙСТВЕННЫЙ СИМПЛЕКС (алгоритм)
-
-def solve_dual_simplex(A, b, c, sense="max", constraint_signs=None, variable_constraints=None):
-    table, names, free_vars, output = _canonicalize(A, b, c, sense, constraint_signs, variable_constraints)
-    canonical_matrix, canonical_rhs, objective, decision_count = table
-    
-    for line in output:
-        print(line)
-        
-    constraint_count, variable_count = canonical_matrix.shape
-    original_objective = np.asarray(c, dtype=float).reshape(-1)
-
-    variable_mapping = []
-    transformed_index = 0
-    for index in range(len(original_objective)):
-        if index in free_vars:
-            variable_mapping.append((transformed_index, transformed_index + 1))
-            transformed_index += 2
-        else:
-            variable_mapping.append((transformed_index, None))
-            transformed_index += 1
-
-    column_support = np.abs(canonical_matrix) > _TOLERANCE
-    basis = []
-    for row in range(constraint_count):
-        candidates = np.flatnonzero(
-            column_support[row] & (column_support.sum(axis=0) == 1)
-        )
-        if not len(candidates):
-            raise ValueError("Нет базиса. Используйте МИБ.")
-        supplemental = candidates[candidates >= decision_count]
-        basis.append(int(supplemental[0] if len(supplemental) else candidates[0]))
-
-    for row, basic_variable in enumerate(basis):
-        coefficient = canonical_matrix[row, basic_variable]
-        canonical_matrix[row, :] /= coefficient
-        canonical_rhs[row] /= coefficient
-
-    row_count = constraint_count
-
-    dual_candidates = np.flatnonzero(canonical_rhs < -_TOLERANCE)
-    if not len(dual_candidates):
-        print("\nНет нужды в двойственном симплексе. Используйте обычный симплекс-метод.")
+    if not primal_result.success:
+        print("Решение прямой задачи не найдено:", primal_result.message)
         return
 
-    print("\nПосле нормализации базисных переменных найдены отрицательные b; применяем двойственный симплекс-метод.")
-    
-    tableau = np.zeros((row_count + 1, variable_count + 1))
-    tableau[:row_count, :variable_count] = canonical_matrix
-    tableau[:row_count, -1] = canonical_rhs
-    tableau[-1, :variable_count] = -objective
-    
-    for row, basic_variable in enumerate(basis):
-        tableau[-1, :] += objective[basic_variable] * tableau[row, :]
-    tableau[np.abs(tableau) < _TOLERANCE] = 0
+    x = primal_result.x
+    primal_value = float(primal_result.fun if direction == "min" else -primal_result.fun)
+    print(f"Оптимальное значение = {primal_value:.6f}")
+    print("Оптимальный план x* =", np.round(x, 6))
 
-    def pivot(row, column):
-        element = tableau[row, column]
-        tableau[row, :] /= element
-        for other_row in range(row_count + 1):
-            if other_row == row:
-                continue
-            factor = tableau[other_row, column]
-            if abs(factor) > _TOLERANCE:
-                tableau[other_row, :] -= factor * tableau[row, :]
-        basis[row] = column
-        tableau[np.abs(tableau) < _TOLERANCE] = 0
-
-    for iteration in range(1, _MAX_ITERATIONS + 1):
-        print("\nБазисные переменные: " + ", ".join(names[index] for index in basis))
-        
-        negative_rhs = np.flatnonzero(tableau[:row_count, -1] < -_TOLERANCE)
-        negative_delta = np.flatnonzero(tableau[-1, :-1] < -_TOLERANCE)
-        
-        if not len(negative_rhs) and not len(negative_delta):
-            _print_table(tableau, basis, names, f"Симплекс-таблица, итерация {iteration}")
-            break
-
-        if len(negative_rhs):
-            leaving = int(negative_rhs[np.argmin(tableau[negative_rhs, -1])])
-            candidates = [
-                column
-                for column in range(variable_count)
-                if tableau[leaving, column] < -_TOLERANCE
-            ]
-            if not candidates:
-                _print_table(tableau, basis, names, f"Симплекс-таблица, итерация {iteration}", pivot_row=leaving)
-                raise ValueError("Задача несовместна: в ведущей строке нет подходящего ведущего столбца.")
-            
-            ratios = {
-                column: tableau[-1, column] / tableau[leaving, column]
-                for column in candidates
-            }
-            entering = max(candidates, key=ratios.__getitem__)
-            print(f"Ведущая строка: {leaving + 1}; ведущий столбец: {names[entering]}; Δ/a = {ratios[entering]:g}.")
+    print("\nПроверка ограничений прямой задачи:")
+    primal_ok = True
+    for i in range(m):
+        lhs = float(A[i] @ x)
+        if signs[i] == "<=":
+            ok = lhs <= b[i] + tolerance
+        elif signs[i] == ">=":
+            ok = lhs >= b[i] - tolerance
         else:
-            entering = int(negative_delta[np.argmin(tableau[-1, negative_delta])])
-            candidates = [
-                row
-                for row in range(row_count)
-                if tableau[row, entering] > _TOLERANCE
-            ]
-            if not candidates:
-                _print_table(tableau, basis, names, f"Симплекс-таблица, итерация {iteration}", pivot_column=entering)
-                raise ValueError("Целевая функция не ограничена на допустимой области.")
-                
-            leaving = min(
-                candidates,
-                key=lambda row: tableau[row, -1] / tableau[row, entering],
-            )
-            print(f"Все b неотрицательны; завершаем оптимизацию обычным симплекс-шагом. Входит {names[entering]}.")
+            ok = abs(lhs - b[i]) <= tolerance
+        primal_ok = primal_ok and ok
+        print(f"Ограничение {i + 1}: {lhs:.6f} {signs[i]} {b[i]:.6f} [{'OK' if ok else 'НЕТ'}]")
 
-        _print_table(
-            tableau, basis, names,
-            f"Симплекс-таблица, итерация {iteration}",
-            pivot_column=entering, pivot_row=leaving,
+    x_nonnegative = bool(np.all(x >= -tolerance))
+    primal_ok = primal_ok and x_nonnegative
+    print("Неотрицательность x:", "OK" if x_nonnegative else "НЕТ")
+
+    # Построение двойственной задачи.
+    # Для min: <= -> y<=0, >= -> y>=0, = -> y свободна; A.T@y <= c.
+    # Для max: <= -> y>=0, >= -> y<=0, = -> y свободна; A.T@y >= c.
+    dual_bounds = []
+    for sign in signs:
+        if sign == "=":
+            dual_bounds.append((None, None))
+        elif direction == "min":
+            dual_bounds.append((None, 0) if sign == "<=" else (0, None))
+        else:
+            dual_bounds.append((0, None) if sign == "<=" else (None, 0))
+
+    print("\n========== ДВОЙСТВЕННАЯ ЗАДАЧА ==========")
+    if direction == "min":
+        dual_result = linprog(
+            c=-b, A_ub=A.T, b_ub=c,
+            bounds=dual_bounds, method="highs",
         )
-        pivot(leaving, entering)
+        dual_direction = "max"
     else:
-        raise ValueError("Превышено максимальное количество итераций.")
+        dual_result = linprog(
+            c=b, A_ub=-A.T, b_ub=-c,
+            bounds=dual_bounds, method="highs",
+        )
+        dual_direction = "min"
 
-    transformed_solution = np.zeros(variable_count)
-    for row, variable in enumerate(basis):
-        if variable < variable_count:
-            transformed_solution[variable] = tableau[row, -1]
-    
-    transformed_solution = transformed_solution[:decision_count]
-    
-    original_solution = np.asarray([
-        transformed_solution[first]
-        if second is None
-        else transformed_solution[first] - transformed_solution[second]
-        for first, second in variable_mapping
-    ])
-    
-    objective_value = float(np.dot(original_objective, original_solution))
-    
-    print("\nРешение исходной задачи: x* = (" + ", ".join(f"{value:g}" for value in original_solution) + f")")
-    print(f"Значение целевой функции: {objective_value:g}")
+    if not dual_result.success:
+        print("Решение двойственной задачи не найдено:", dual_result.message)
+        return
 
+    y = dual_result.x
+    dual_value = float(-dual_result.fun if direction == "min" else dual_result.fun)
+    print(f"Оптимальное значение W_{dual_direction} = {dual_value:.6f}")
+    print("Оптимальный план y* =", np.round(y, 6))
 
-# ИНТЕРФЕЙС (ВВОД/ВЫВОД)
+    print("\nПроверка ограничений двойственной задачи:")
+    dual_ok = True
+    lhs_values = A.T @ y
+    for j in range(n):
+        if direction == "min":
+            ok = lhs_values[j] <= c[j] + tolerance
+            relation = "<="
+        else:
+            ok = lhs_values[j] >= c[j] - tolerance
+            relation = ">="
+        dual_ok = dual_ok and bool(ok)
+        print(f"Ограничение {j + 1}: {lhs_values[j]:.6f} {relation} {c[j]:.6f} [{'OK' if ok else 'НЕТ'}]")
+
+    print("\nПроверка знаков переменных y:")
+    for i, sign in enumerate(signs):
+        if sign == "=":
+            ok, description = True, "свободная переменная"
+        elif direction == "min" and sign == "<=":
+            ok, description = y[i] <= tolerance, "y <= 0"
+        elif direction == "min" and sign == ">=":
+            ok, description = y[i] >= -tolerance, "y >= 0"
+        elif direction == "max" and sign == "<=":
+            ok, description = y[i] >= -tolerance, "y >= 0"
+        else:
+            ok, description = y[i] <= tolerance, "y <= 0"
+        dual_ok = dual_ok and bool(ok)
+        print(f"Переменная y{i + 1}: {y[i]:.6f}, {description} [{'OK' if ok else 'НЕТ'}]")
+
+    print("\n========== ИТОГОВАЯ ПРОВЕРКА ==========")
+    print("Прямая задача допустима:", "OK" if primal_ok else "НЕТ")
+    print("Двойственная задача допустима:", "OK" if dual_ok else "НЕТ")
+    print(f"Значение прямой задачи = {primal_value:.6f}")
+    print(f"Значение двойственной задачи = {dual_value:.6f}")
+
+    if primal_ok and dual_ok and np.isclose(primal_value, dual_value, rtol=1e-7, atol=1e-9):
+        print("\nВЫВОД: обе задачи решены оптимально.")
+    else:
+        print("\nВЫВОД: проверьте результаты и допустимость решений.")
+
 
 def get_int(prompt: str) -> int:
     while True:
         try:
-            return int(input(prompt))
+            value = int(input(prompt))
+            if value > 0:
+                return value
         except ValueError:
-            print("Ошибка: введите целое число.")
+            pass
+        print("Ошибка: введите целое положительное число.")
 
 
 def get_float_list(prompt: str, expected_length: int | None = None) -> list[float]:
     while True:
         try:
-            raw = input(prompt).split()
-            values = [float(x) for x in raw]
+            values = [float(value.replace(",", ".")) for value in input(prompt).replace(";", " ").split()]
             if expected_length is not None and len(values) != expected_length:
                 print(f"Ошибка: необходимо ввести ровно {expected_length} чисел.")
                 continue
@@ -837,96 +674,66 @@ def get_float_list(prompt: str, expected_length: int | None = None) -> list[floa
 
 def run_transport() -> None:
     print("\n=== Интерактивное решение транспортной задачи ===\n")
-    
     rows = get_int("Введите количество складов (строк): ")
     columns = get_int("Введите количество потребителей (столбцов): ")
 
     print("\nВведите матрицу тарифов (построчно, числа через пробел):")
-    costs = []
-    for i in range(rows):
-        row = get_float_list(f"Тарифы для склада {i + 1}: ", columns)
-        costs.append(row)
-
-    print("\nВведите запасы для каждого склада (через пробел):")
+    costs = [get_float_list(f"Тарифы для склада {i + 1}: ", columns) for i in range(rows)]
     supply = get_float_list("Запасы: ", rows)
-
-    print("\nВведите потребности для каждого потребителя (через пробел):")
     demand = get_float_list("Потребности: ", columns)
 
     print("\n" + "=" * 50)
-    print("РЕШЕНИЕ ЗАДАЧИ:")
+    print("РЕШЕНИЕ ТРАНСПОРТНОЙ ЗАДАЧИ:")
     print("=" * 50)
-    
     solve_transport(costs, supply, demand)
 
 
-def run_dual_simplex() -> None:
-    print("\n=== Интерактивное решение задачи двойственным симплекс-методом ===\n")
-    
-    print("1. Введите коэффициенты целевой функции (через пробел):")
-    c = get_float_list("c: ")
-    
-    print("\n2. Введите тип оптимизации (max или min):")
+def run_linear_programming() -> None:
+    print("\n=== Решение прямой и двойственной задач ЛП ===\n")
+    n = get_int("Число переменных n: ")
+    m = get_int("Число ограничений m: ")
+
+    c = get_float_list(f"Вектор c ({n} чисел): ", n)
     while True:
-        sense = input("Sense: ").strip().lower()
-        if sense in ("max", "min"):
+        direction = input("Направление (min/max): ").strip().lower()
+        if direction in ("min", "max"):
             break
-        print("Ошибка: введите 'max' или 'min'.")
+        print("Ошибка: введите min или max.")
 
-    print(f"\n3. Количество переменных определено по целевой функции: {len(c)}")
-    n = len(c)
-    m = get_int("   Введите количество ограничений (m): ")
+    print("\nВведите матрицу коэффициентов A:")
+    A = [get_float_list(f"Строка {i + 1}: ", n) for i in range(m)]
 
-    print("\n4. Введите матрицу ограничений A (построчно, числа через пробел):")
-    A = []
+    print("\nВведите знаки ограничений (<=, >= или =):")
+    signs = []
     for i in range(m):
-        row = get_float_list(f"Ограничение {i + 1}: ", n)
-        A.append(row)
+        while True:
+            sign = input(f"Знак ограничения {i + 1}: ").strip()
+            if sign in ("<=", ">=", "="):
+                signs.append(sign)
+                break
+            print("Допустимые знаки: <=, >=, =")
 
-    print("\n5. Введите правую часть ограничений b (через пробел):")
-    b = get_float_list("b: ", m)
-
-    print("\n6. Введите знаки ограничений через пробел (например: <= >= =):")
-    while True:
-        signs = input("Знаки: ").split()
-        if len(signs) == m and all(s in ("<=", ">=", "=") for s in signs):
-            break
-        print(f"Ошибка: необходимо ввести ровно {m} знаков (<=, >=, =).")
-
-    print("\n7. Введите ограничения на переменные (>=0 или any для каждой):")
-    while True:
-        vc_input = input("Ограничения: ").split()
-        if len(vc_input) == n and all(s in (">=0", "any") for s in vc_input):
-            break
-        print(f"Ошибка: необходимо ввести ровно {n} условий (>=0 или any).")
-    
-    variable_constraints = ["nonnegative" if s == ">=0" else "free" for s in vc_input]
-
-    print("\n" + "=" * 50)
-    print("РЕШЕНИЕ ЗАДАЧИ:")
-    print("=" * 50)
-    
-    try:
-        solve_dual_simplex(A, b, c, sense, signs, variable_constraints)
-    except Exception as e:
-        print(f"\nОшибка при решении: {e}")
+    b = get_float_list(f"Вектор b ({m} чисел): ", m)
+    print("\nУсловия: все переменные неотрицательны (x >= 0).")
+    solve_linear_programming(
+        np.asarray(c, dtype=float), np.asarray(A, dtype=float),
+        np.asarray(b, dtype=float), direction, signs,
+    )
 
 
 def main() -> None:
-    print("Выберите метод решения:")
+    print("Выберите задачу:")
     print("1. Транспортная задача")
-    print("2. Двойственный симплекс-метод")
-    
+    print("2. Прямая и двойственная задачи линейного программирования")
     while True:
         choice = input("\nВаш выбор (1 или 2): ").strip()
         if choice == "1":
             run_transport()
             break
-        elif choice == "2":
-            run_dual_simplex()
+        if choice == "2":
+            run_linear_programming()
             break
-        else:
-            print("Ошибка: введите 1 или 2.")
+        print("Ошибка: введите 1 или 2.")
 
 
 if __name__ == "__main__":
