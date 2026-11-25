@@ -3,9 +3,9 @@ import numpy.typing as npt
 from collections import deque
 from dataclasses import dataclass
 
-# ТРАНСПОРТНАЯ ЗАДАЧА
 
 _TOLERANCE = 1e-10
+_MAX_ITERATIONS = 1000
 
 @dataclass
 class _ClosedProblem:
@@ -79,6 +79,8 @@ def _close_problem(
     report.add(f"Потребности: {demand.tolist()}")
     return _ClosedProblem(costs, supply, demand, supplier_names, consumer_names)
 
+
+# ТРАНСПОРТНАЯ ЗАДАЧА (начальный план и вырожденность)
 
 def _add_zero_basic_cells(basic: np.ndarray) -> None:
     rows, columns = basic.shape
@@ -178,6 +180,8 @@ def _least_cost(
     return allocations, basic
 
 
+# ТРАНСПОРТНАЯ ЗАДАЧА (метод потенциалов)
+
 def _calculate_potentials(
     costs: np.ndarray, basic: np.ndarray
 ) -> _PotentialStep:
@@ -235,7 +239,7 @@ def _find_cycle(basic: np.ndarray, entering: tuple[int, int]) -> list[tuple[int,
     path: list[tuple[int, int]] = []
     vertex = target
     while vertex != start:
-        previous, cell = parents[vertex] 
+        previous, cell = parents[vertex]
         path.append(cell)
         vertex = previous
     path.reverse()
@@ -276,6 +280,8 @@ def _redistribute(
     basic[leaving] = False
     return float(amount)
 
+
+# ТРАНСПОРТНАЯ ЗАДАЧА (вывод и главный цикл)
 
 def _display_table(
     problem: _ClosedProblem,
@@ -505,11 +511,8 @@ def solve_transport(
     report = _Report()
     return _solve_transport_impl(costs, supply, demand, report=report)
 
-# ДВОЙСТВЕННЫЙ СИМПЛЕКС 
 
-_TOLERANCE = 1e-10
-_MAX_ITERATIONS = 1000
-
+# ДВОЙСТВЕННЫЙ СИМПЛЕКС (канонизация и вывод)
 
 def format_equation(row, var_names):
     terms = []
@@ -668,6 +671,8 @@ def _print_table(tableau, basis, names, title, pivot_row=None, pivot_column=None
         print(sep)
 
 
+# ДВОЙСТВЕННЫЙ СИМПЛЕКС (алгоритм)
+
 def solve_dual_simplex(A, b, c, sense="max", constraint_signs=None, variable_constraints=None):
     table, names, free_vars, output = _canonicalize(A, b, c, sense, constraint_signs, variable_constraints)
     canonical_matrix, canonical_rhs, objective, decision_count = table
@@ -806,7 +811,8 @@ def solve_dual_simplex(A, b, c, sense="max", constraint_signs=None, variable_con
     print("\nРешение исходной задачи: x* = (" + ", ".join(f"{value:g}" for value in original_solution) + f")")
     print(f"Значение целевой функции: {objective_value:g}")
 
-# ИНТЕРФЕЙС
+
+# ИНТЕРФЕЙС (ВВОД/ВЫВОД)
 
 def get_int(prompt: str) -> int:
     while True:
